@@ -1,7 +1,11 @@
 Census of  N. Libedinsky,
 "Polytopal invariance for Lusztig's q-weight multiplicities"
 
-Exhaustive over the pairs lambda <= mu whose fundamental-weight
+P^Phi_{mu,lambda} = (mu + C) cap (lambda - C) cap (closure(D) - rho),
+K^Phi_{lambda,mu}(q) = Lusztig's q-analogue of the mu-weight
+multiplicity in V(lambda).
+
+Exhaustive over the pairs mu <= lambda whose fundamental-weight
 coordinates are bounded by:
 
     A1   <= 12

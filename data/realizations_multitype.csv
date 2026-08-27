@@ -1,4 +1,4 @@
-class_id,crosses_families,type,lambda,mu
+class_id,crosses_families,type,mu,lambda
 1,1,A1,0,0
 1,1,A1,10,10
 1,1,A1,11,11
