@@ -3,19 +3,29 @@
 polytopal_census.py -- companion code for
   N. Libedinsky, "Polytopal invariance for Lusztig's q-weight multiplicities".
 
-Self-contained (Python 3 + numpy).  Everything is computed EXACTLY: polytope
-vertices and pairwise squared distances over the rationals (Fraction), Lusztig's
-q-analogue K^Phi_{mu,lambda}(q) via the q-analogue of Kostant's partition
-function, and isometry of polytopes by exact congruence of vertex distance
-matrices (an isometry of the vertex set extends affinely to the polytopes).
+Notation follows the paper: mu <= lambda are dominant weights in the dominance
+order, lambda is the HIGHEST weight, mu the lower one, the polytope is
 
-Root systems: A1-A5, B2-B4, C3, C4, D4, D5, F4, G2, E6, in the normalization
-where long roots have squared length 2 (so distances are comparable across
-types).  Weights are given by their fundamental-weight coordinates.
+    P^Phi_{mu,lambda} = (mu + C) cap (lambda - C) cap (closure(D) - rho),
+
+and the polynomial is Lusztig's q-analogue K^Phi_{lambda,mu}(q) of the mu-weight
+multiplicity in the irreducible highest-weight representation V(lambda).
+Internally the two weights are called `low` (= mu) and `high` (= lambda), and the
+catalog columns `low`/`high` mean the same.
+
+Self-contained (Python 3 + numpy).  The geometry is computed in exact rational
+arithmetic (Fraction): polytope vertices and pairwise squared distances, and
+isometry of polytopes by exact congruence of vertex distance matrices (an
+isometry of the vertex set extends affinely to the polytopes).  The partition
+function and the Weyl sum are exact integer computations carried in numpy int64,
+with runtime guards that abort if any intermediate could wrap around (see
+_check_int64 and _Pq_box_np); the only floating-point object in the file, a
+Cholesky factor, is never used by the census path.
 
 Usage:
-  python3 polytopal_census.py pair TYPE LOW HIGH
-      K^Phi_{mu,lambda} for lambda=LOW <= mu=HIGH, e.g.:
+  python3 polytopal_census.py pair TYPE MU LAMBDA
+      K^Phi_{lambda,mu} for the dominant pair mu <= lambda, e.g. the D5 example
+      of the paper (mu = w_3 + w_5, lambda = w_1 + w_2 + w_3 + w_4):
       python3 polytopal_census.py pair D5 0,0,1,0,1 1,1,1,1,0
   python3 polytopal_census.py census [catalog.db]
       Full census of the paper: enumerate all nonempty polytopes with the
@@ -26,14 +36,17 @@ Usage:
       Small census (types A1,A2,A3,B2,G2, coordinates <= 4; a few minutes).
   python3 polytopal_census.py verifyk [catalog.db]
       (Re)run the K-agreement check on an existing catalog.
-  python3 polytopal_census.py isocheck [catalog.db]
+  python3 polytopal_census.py isocheck [catalog.db] [members_per_class]
       Cross-validate the isometry classes with an independent matching
-      algorithm (Weisfeiler-Leman colour refinement + guided matching).
+      algorithm (Weisfeiler-Leman colour refinement + guided matching).  The
+      false-negative guard (no two classes share a distance signature) is
+      exhaustive; the false-positive guard recomputes `members_per_class`
+      members of each multi-member class (default 2, 0 = all of them).
   python3 polytopal_census.py numbers [catalog.db]
       Print the summary numbers quoted in the paper.
 
 Census bounds used in the paper (fundamental-weight coordinates of both
-lambda and mu):
+mu and lambda):
   12 for A1, A2, B2, G2;  8 for A3;  6 for B3, C3;
   3 for A4, B4, C4, D4, F4;  1 for A5, D5, E6.
 """
@@ -364,6 +377,16 @@ def Pq(grp, beta, memo=None):
         return res
     return rec(target, 0)
 
+def _check_int64(*arrays, bound=1 << 62):
+    """Abort rather than wrap around silently.  Every integer array below is a
+    numpy int64 array whose entries must stay well inside the int64 range for
+    the computation to be exact; this asserts it explicitly at runtime."""
+    for a in arrays:
+        if a.size and int(np.abs(a).max()) >= bound:
+            raise OverflowError("int64 magnitude guard tripped: the exact "
+                                "integer arithmetic would wrap around")
+
+
 def _Pq_box_np(grp, betas):
     # FAST batched Kostant q-partition function.  Computes P_q for a WHOLE BATCH of
     # target betas that share ONE dense numpy box-DP over [0,M] (M = componentwise
@@ -405,6 +428,11 @@ def _Pq_box_np(grp, betas):
             dst=tuple(slice(offs[i],S[i]) for i in range(r))+(slice(k,Q),)
             src=tuple(slice(0,S[i]-offs[i]) for i in range(r))+(slice(0,Q-k),)
             dp_new[dst]+=dp[src]
+        # Entries of dp are counts, hence nonnegative; a negative entry could
+        # only come from an int64 wraparound.  Check every step, not just the
+        # last, so an overflow cannot be masked by later additions.
+        if int(dp_new.min()) < 0 or int(dp_new.max()) >= (1 << 62):
+            raise OverflowError("int64 overflow in the q-partition-function DP")
         dp=dp_new
     out={}
     for t in uniq:
@@ -414,6 +442,9 @@ def _Pq_box_np(grp, betas):
     return out
 
 def kostka_foulkes(grp, top, low):
+    """K^Phi_{lambda,mu}(q) by Lusztig's formula, with top = lambda (the highest
+    weight) and low = mu.  Reference implementation: one memoized recursion per
+    term of the Weyl sum."""
     r=grp['r']; rho=grp['rho']
     topa=to_alpha(grp, top); lowa=to_alpha(grp, low)
     topr=[topa[j]+rho[j] for j in range(r)]
@@ -429,6 +460,7 @@ def kostka_foulkes(grp, top, low):
     Marr,signs=get_weyl_np(grp)
     tv=np.array([int(x*D) for x in topr],dtype=np.int64)
     lv=np.array([int(x*D) for x in lowr],dtype=np.int64)
+    _check_int64(Marr, tv, lv, bound=1 << 20)      # matmul then stays < 2^63
     beta_scaled=(Marr@tv)-lv                       # (|W|, r) == D*beta
     valid=(beta_scaled>=0).all(axis=1)&((beta_scaled%D==0).all(axis=1))
     for i in np.nonzero(valid)[0]:
@@ -441,6 +473,7 @@ def kostka_foulkes(grp, top, low):
     return {k:v for k,v in result.items() if v!=0}
 
 def kostka_foulkes_fast(grp, top, low):
+    """Same as kostka_foulkes (top = lambda, low = mu), on the fast path."""
     # Same math as kostka_foulkes, but computes every valid beta's P_q with ONE
     # shared box-DP (via _Pq_box_np) instead of |W| memoized recursions.  This is
     # the E6-tractable path; validated to agree with kostka_foulkes bit-for-bit.
@@ -454,6 +487,7 @@ def kostka_foulkes_fast(grp, top, low):
     Marr,signs=get_weyl_np(grp)
     tv=np.array([int(x*D) for x in topr],dtype=np.int64)
     lv=np.array([int(x*D) for x in lowr],dtype=np.int64)
+    _check_int64(Marr, tv, lv, bound=1 << 20)      # matmul then stays < 2^63
     beta_scaled=(Marr@tv)-lv                       # (|W|, r) == D*beta
     valid=(beta_scaled>=0).all(axis=1)&((beta_scaled%D==0).all(axis=1))
     idx=np.nonzero(valid)[0]
@@ -469,15 +503,16 @@ def kostka_foulkes_fast(grp, top, low):
     return {k:v for k,v in result.items() if v!=0}
 
 def vertices_exact(grp, low, high):
+    """Vertices of P^Phi_{mu,lambda} with low = mu and high = lambda."""
     r=grp['r']; G=grp['G']; rho=grp['rho']
-    lowa=to_alpha(grp, low); mua=to_alpha(grp, high)
+    lowa=to_alpha(grp, low); higha=to_alpha(grp, high)
     for i in range(r):
-        if mua[i]<lowa[i]: return None
+        if higha[i]<lowa[i]: return None
     Grho=matvec(G, rho)
     H=[]  # (a, b): a.x <= b
     for i in range(r):
         e=[Fr(0)]*r; e[i]=Fr(-1); H.append((e, -lowa[i]))   # x_i >= lowa[i]
-        e=[Fr(0)]*r; e[i]=Fr(1);  H.append((e,  mua[i]))    # x_i <= mua[i]
+        e=[Fr(0)]*r; e[i]=Fr(1);  H.append((e,  higha[i]))  # x_i <= higha[i]
     for i in range(r):
         a=[-G[i][j] for j in range(r)]; H.append((a, Grho[i]))  # (Gx)_i >= -Grho[i]
     verts=set()
@@ -693,9 +728,12 @@ def verify_k_db(db_path='catalog.db', recheck_all=False, only_missing=False):
 
 def validate_isometry_db(db_path='catalog.db', sample_per_class=2, max_classes=None):
     """Cross-validate the class partition with the independent refine method.
-    (a) FALSE-NEGATIVE guard: no two distinct classes share a signature.
+    (a) FALSE-NEGATIVE guard: no two distinct classes share a signature.  This
+        one is exhaustive: it is a single query over all classes.
     (b) FALSE-POSITIVE guard: recompute member polytopes and confirm each is
-        iso_equal_refine to its class representative."""
+        iso_equal_refine to its class representative.  This one is a SAMPLE:
+        it uses the first `sample_per_class` members of each multi-member
+        class (default 2).  Pass a huge value to cover every member."""
     con = db_connect(db_path)
     coll = con.execute(
         "SELECT COUNT(*) FROM (SELECT sig_n,sig_key FROM classes "
@@ -708,13 +746,14 @@ def validate_isometry_db(db_path='catalog.db', sample_per_class=2, max_classes=N
     multi = con.execute(
         "SELECT class_id FROM realizations GROUP BY class_id HAVING COUNT(*)>1").fetchall()
     if max_classes: multi = multi[:max_classes]
-    bad = []; checked = 0
+    bad = []; checked = 0; nseen = 0
     for (cid,) in multi:
         (d_json,) = con.execute("SELECT d_json FROM classes WHERE id=?", (cid,)).fetchone()
         Dref = [[_s2fr(s) for s in row] for row in json.loads(d_json)]
         reps = con.execute("SELECT type,low,high FROM realizations WHERE class_id=? LIMIT ?",
                            (cid, sample_per_class)).fetchall()
         for t, lo, hi in reps:
+            nseen += 1
             g = GROUPS[t]
             v = vertices_exact(g, tuple(json.loads(lo)), tuple(json.loads(hi)))
             Dm = sqdist_matrix_exact(g, v)
@@ -722,7 +761,8 @@ def validate_isometry_db(db_path='catalog.db', sample_per_class=2, max_classes=N
                 bad.append((cid, t, lo, hi))
         checked += 1
         if checked % 5000 == 0: print(f"  ...{checked} classes cross-checked", flush=True)
-    print(f"  (b) members cross-checked over {checked} multi-classes; "
+    print(f"  (b) up to {sample_per_class} member(s) per class cross-checked "
+          f"over {checked} multi-classes ({nseen} members in total); "
           f"non-isometric members found: {len(bad)}")
     if bad:
         print("      !!! independent method DISAGREES with stored class on:")
@@ -810,8 +850,9 @@ if __name__ == '__main__':
         nm = args[1]; low = _parse_wt(args[2]); high = _parse_wt(args[3])
         g = GROUPS[nm]
         if not dominance_le(g, low, high):
-            print(f"{low} <= {high} fails in the dominance order of {nm}"); sys.exit(1)
-        print(f"K^{nm}_{{mu={high}, lambda={low}}}(q) =",
+            print(f"mu={low} <= lambda={high} fails in the dominance order "
+                  f"of {nm}"); sys.exit(1)
+        print(f"K^{nm}_{{lambda={high}, mu={low}}}(q) =",
               poly_str(kostka_foulkes_fast(g, high, low)))
     elif cmd == 'census':
         db = args[1] if len(args) > 1 else 'catalog.db'
@@ -828,7 +869,9 @@ if __name__ == '__main__':
     elif cmd == 'verifyk':
         verify_k_db(args[1] if len(args) > 1 else 'catalog.db', recheck_all=True)
     elif cmd == 'isocheck':
-        validate_isometry_db(args[1] if len(args) > 1 else 'catalog.db')
+        spc = int(args[2]) if len(args) > 2 else 2
+        validate_isometry_db(args[1] if len(args) > 1 else 'catalog.db',
+                             sample_per_class=(spc if spc > 0 else 10**9))
     elif cmd == 'numbers':
         paper_numbers(args[1] if len(args) > 1 else 'catalog.db')
     else:

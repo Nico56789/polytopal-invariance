@@ -10,6 +10,10 @@ counts, and the full list of isometry classes that are realized in more than one
 Dynkin type -- the coincidences that motivate the main theorem -- so that a
 reader can inspect every one of them without re-running the census.
 
+Notation follows the paper: mu <= lambda, lambda is the highest weight, the
+polytope is P^Phi_{mu,lambda} and the polynomial K^Phi_{lambda,mu}(q).  The
+catalog columns `low`/`high` are mu/lambda respectively.
+
 Usage:
     python3 export_data.py [catalog.db] [outdir]
 """
@@ -33,7 +37,7 @@ def main(db_path='catalog.db', outdir='data'):
     # ---- one pass over the realizations ------------------------------------
     types_of = defaultdict(set)      # class -> set of Dynkin types
     count_of = Counter()             # class -> number of realizations
-    first_of = {}                    # (class, type) -> first (lambda, mu)
+    first_of = {}                    # (class, type) -> first (mu, lambda)
     rows = con.execute("SELECT class_id,type,low,high FROM realizations "
                        "ORDER BY class_id,type,low,high").fetchall()
     for cid, t, lo, hi in rows:
@@ -50,7 +54,11 @@ def main(db_path='catalog.db', outdir='data'):
     L = ["Census of  N. Libedinsky,",
          '"Polytopal invariance for Lusztig\'s q-weight multiplicities"',
          "",
-         "Exhaustive over the pairs lambda <= mu whose fundamental-weight",
+         "P^Phi_{mu,lambda} = (mu + C) cap (lambda - C) cap (closure(D) - rho),",
+         "K^Phi_{lambda,mu}(q) = Lusztig's q-analogue of the mu-weight",
+         "multiplicity in V(lambda).",
+         "",
+         "Exhaustive over the pairs mu <= lambda whose fundamental-weight",
          "coordinates are bounded by:", ""]
     for t in sorted(PAPER_BOUNDS, key=TKEY):
         L.append(f"    {t:3}  <= {PAPER_BOUNDS[t]}")
@@ -86,7 +94,8 @@ def main(db_path='catalog.db', outdir='data'):
         with open(path, 'w', newline='') as f:
             w = csv.writer(f)
             w.writerow(['class_id', 'vertices', 'n_types', 'types',
-                        'n_realizations', 'K', 'one_example_per_type'])
+                        'n_realizations', 'K',
+                        'one_example_mu_to_lambda_per_type'])
             for cid in ids:
                 sig_n, k_json = info[cid]
                 ts = sorted(types_of[cid], key=TKEY)
@@ -106,7 +115,7 @@ def main(db_path='catalog.db', outdir='data'):
     n = 0
     with open(path, 'w', newline='') as f:
         w = csv.writer(f)
-        w.writerow(['class_id', 'crosses_families', 'type', 'lambda', 'mu'])
+        w.writerow(['class_id', 'crosses_families', 'type', 'mu', 'lambda'])
         for cid, t, lo, hi in rows:
             if cid in mt_set:
                 w.writerow([cid, int(cid in cf_set), t, wt(lo), wt(hi)])
